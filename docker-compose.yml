@@ -1,0 +1,32 @@
+# Three shard nodes + gateway. Secrets come from .env (see .env.example); nothing is hard-coded.
+x-common: &common
+  build: .
+  env_file: .env
+  environment: &env
+    SCLLM_MODEL: ${SCLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}
+    SCLLM_NUM_SHARDS: "3"
+    HF_HOME: /cache
+  volumes: ["hf-cache:/cache"]
+
+services:
+  node0:
+    <<: *common
+    environment: { <<: *env, SCLLM_SHARD_INDEX: "0" }
+  node1:
+    <<: *common
+    environment: { <<: *env, SCLLM_SHARD_INDEX: "1" }
+  node2:
+    <<: *common
+    environment: { <<: *env, SCLLM_SHARD_INDEX: "2" }
+  gateway:
+    <<: *common
+    command: ["uvicorn", "scllm.api.gateway:build_from_env", "--factory", "--host", "0.0.0.0", "--port", "8080"]
+    environment:
+      <<: *env
+      SCLLM_NODES: http://node0:8000,http://node1:8000,http://node2:8000
+      SCLLM_AUDIT_LOG: /cache/audit.jsonl
+    ports: ["8080:8080"]
+    depends_on: [node0, node1, node2]
+
+volumes:
+  hf-cache:
