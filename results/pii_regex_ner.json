@@ -1,0 +1,107 @@
+{
+ "n_reports": 500,
+ "seed": 0,
+ "ner": true,
+ "scores": {
+  "AD": {
+   "precision": 1.0,
+   "recall": 0.989,
+   "f1": 0.994,
+   "support": 1403
+  },
+  "DOGUM_TARIHI": {
+   "precision": 1.0,
+   "recall": 1.0,
+   "f1": 1.0,
+   "support": 350
+  },
+  "EMAIL": {
+   "precision": 1.0,
+   "recall": 1.0,
+   "f1": 1.0,
+   "support": 206
+  },
+  "IBAN": {
+   "precision": 1.0,
+   "recall": 1.0,
+   "f1": 1.0,
+   "support": 99
+  },
+  "KAYIT_NO": {
+   "precision": 1.0,
+   "recall": 1.0,
+   "f1": 1.0,
+   "support": 347
+  },
+  "TCKN": {
+   "precision": 1.0,
+   "recall": 1.0,
+   "f1": 1.0,
+   "support": 448
+  },
+  "TELEFON": {
+   "precision": 1.0,
+   "recall": 1.0,
+   "f1": 1.0,
+   "support": 295
+  },
+  "MICRO": {
+   "precision": 1.0,
+   "recall": 0.995,
+   "f1": 0.997,
+   "support": 3148
+  }
+ },
+ "error_examples": [
+  [
+   "FN",
+   "AD",
+   "Ömer Şahin"
+  ],
+  [
+   "FN",
+   "AD",
+   "Elif Erdoğan"
+  ],
+  [
+   "FN",
+   "AD",
+   "Ece Yılmaz"
+  ],
+  [
+   "FN",
+   "AD",
+   "Merve Özdemir"
+  ],
+  [
+   "FN",
+   "AD",
+   "Yusuf Yılmaz"
+  ],
+  [
+   "FN",
+   "AD",
+   "Hatice Güneş"
+  ],
+  [
+   "FN",
+   "AD",
+   "Gül Yılmaz"
+  ],
+  [
+   "FN",
+   "AD",
+   "Kerem Güneş"
+  ],
+  [
+   "FN",
+   "AD",
+   "Fatma Çetin"
+  ],
+  [
+   "FN",
+   "AD",
+   "Hatice Özdemir"
+  ]
+ ]
+}

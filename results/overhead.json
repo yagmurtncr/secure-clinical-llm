@@ -1,0 +1,54 @@
+{
+ "hardware": {
+  "machine": "x86_64",
+  "processor": "x86_64",
+  "torch_threads": 2,
+  "cuda": false
+ },
+ "crypto": {
+  "h896_decode_step": {
+   "median_ms": 0.0149,
+   "bytes": 1792
+  },
+  "h896_prefill_512": {
+   "median_ms": 0.5516,
+   "bytes": 917504
+  },
+  "h3584_decode_step": {
+   "median_ms": 0.0171,
+   "bytes": 7168
+  },
+  "h3584_prefill_512": {
+   "median_ms": 2.4873,
+   "bytes": 3670016
+  },
+  "h4096_decode_step": {
+   "median_ms": 0.016,
+   "bytes": 8192
+  },
+  "h4096_prefill_512": {
+   "median_ms": 2.8207,
+   "bytes": 4194304
+  }
+ },
+ "e2e": {
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "shards": 3,
+  "new_tokens": 48,
+  "prompt_len": 128,
+  "monolithic_hf": {
+   "s": 5.005,
+   "tok_per_s": 9.59
+  },
+  "split_local": {
+   "s": 4.913,
+   "tok_per_s": 9.77
+  },
+  "split_remote_encrypted": {
+   "s": 5.75,
+   "tok_per_s": 8.35
+  },
+  "remote_overhead_ms_per_token": 17.44,
+  "identical_output": true
+ }
+}
