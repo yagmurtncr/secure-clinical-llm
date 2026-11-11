@@ -49,9 +49,11 @@ logical order).
 
 ## Known limitations (stated on purpose)
 
-* **Hidden-state inversion.** Intermediate activations of a transformer are known to leak the input text,
-  especially in early layers. Split inference here is a *deployment and data-minimization* measure, not a
-  cryptographic guarantee: what a node could reconstruct is the masked report, not the identifiers.
+* **Hidden-state inversion (measured).** A ridge-regression attacker trained on self-generated reports recovers
+  ~97% of input tokens from the hidden state at *every* layer of Qwen2.5-0.5B, and ~27-42% of tokens of names it
+  never saw (README, section 3). Keeping the first few layers on the gateway does not help. Split inference is
+  therefore a *deployment* measure, not a confidentiality mechanism: nodes must be trusted on-premise machines,
+  and what a node could reconstruct must be limited to the masked report - which is why masking happens first.
 * **PII detection is not perfect.** Recall on the synthetic benchmark is high but real reports are messier;
   free-text names rely on the NER model. Missed identifiers would reach the nodes as hidden states.
 * **Nodes are assumed honest-but-curious.** A malicious node can return wrong activations and corrupt the
