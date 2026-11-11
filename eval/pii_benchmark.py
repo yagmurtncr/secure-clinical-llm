@@ -73,7 +73,9 @@ class Doc:
         return "".join(self.parts)
 
 
-def make_report(r: random.Random) -> Doc:
+def make_report(r: random.Random, hard: bool = False) -> Doc:
+    if hard:
+        return make_hard_report(r)
     d = Doc()
     name = f"{r.choice(FIRST)} {r.choice(LAST)}"
     doctor = f"{r.choice(FIRST)} {r.choice(LAST)}"
@@ -131,6 +133,61 @@ def make_report(r: random.Random) -> Doc:
     return d
 
 
+def make_hard_report(r: random.Random) -> Doc:
+    """Out-of-template variants the detector was *not* designed around: unseen field labels, upper-case and
+    lower-case names, letter-style salutations, spaced ID numbers, identifiers inside running sentences."""
+    d = Doc()
+    name = f"{r.choice(FIRST)} {r.choice(LAST)}"
+    style = r.choice(["upper", "lower", "title"])
+    shown = name.upper() if style == "upper" else (name.lower() if style == "lower" else name)
+    d.add(r.choice(["Sayın ", "İsim: ", "Hastanın Adı: ", "Adı: ", "Hasta adı-soyadı: "]))
+    d.add(shown, "AD")
+    d.add(r.choice([",\n", "\n"]))
+    tc = rand_tckn(r)
+    if r.random() < 0.5:
+        d.add("Kimlik numarası ")
+        d.add(f"{tc[:3]} {tc[3:6]} {tc[6:9]} {tc[9:]}", "TCKN")
+        d.add(" olarak kayıtlıdır.\n")
+    else:
+        d.add("TCKN ")
+        d.add(tc, "TCKN")
+        d.add(" ile başvurdu.\n")
+    if r.random() < 0.6:
+        ph = f"05{r.randint(30, 59)}{r.randint(1000000, 9999999)}"
+        d.add("Sonuçlar için ")
+        d.add(ph, "TELEFON")
+        d.add(" numarasından aranacaktır.\n")
+    d.add("\nTETKİK              SONUÇ    BİRİM     REFERANS\n")
+    for test, unit, lo, hi in r.sample(LABS, r.randint(3, 6)):
+        v = round(r.uniform(lo * 0.6 if lo else 0, hi * 1.4), 1)
+        d.add(f"{test:<20}{v:<9}{unit:<10}{lo} - {hi}\n")
+    if r.random() < 0.5:
+        d.add(f"Lot: {r.randint(500, 559)}{r.randint(1000000, 9999999)}  Barkod: {invalid_11(r)}\n")
+    if r.random() < 0.7:
+        rel = f"{r.choice(FIRST)} {r.choice(LAST)}"
+        d.add("Sonuçlar eşi ")
+        d.add(rel, "AD")
+        d.add(" ile paylaşıldı.\n")
+    return d
+
+
+def bootstrap_f1(docs, ner, n_boot=1000, seed=0):
+    """95% CI of micro F1 by resampling reports."""
+    per = []
+    for d in docs:
+        pred = {(s.start, s.end, s.label) for s in _propagate(d.text, detect(d.text, ner))}
+        gold = set(d.spans)
+        per.append((len(pred & gold), len(pred - gold), len(gold - pred)))
+    rng = random.Random(seed)
+    vals = []
+    for _ in range(n_boot):
+        smp = [per[rng.randrange(len(per))] for _ in per]
+        T, F, N = (sum(x[i] for x in smp) for i in range(3))
+        vals.append(2 * T / (2 * T + F + N) if T else 0.0)
+    vals.sort()
+    return round(vals[int(0.025 * n_boot)], 3), round(vals[int(0.975 * n_boot) - 1], 3)
+
+
 def score(docs, ner=None):
     tp, fp, fn = defaultdict(int), defaultdict(int), defaultdict(int)
     errors = []
@@ -163,21 +220,24 @@ def main():
     ap.add_argument("--n", type=int, default=500)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--ner", action="store_true", help="add the transformer NER backend")
+    ap.add_argument("--hard", action="store_true", help="out-of-template stress set")
     ap.add_argument("--out", default="results/pii_benchmark.json")
     a = ap.parse_args()
     r = random.Random(a.seed)
-    docs = [make_report(r) for _ in range(a.n)]
+    docs = [make_report(r, hard=a.hard) for _ in range(a.n)]
     ner = None
     if a.ner:
         from scllm.pii.detectors import HFNer
         ner = HFNer()
     rows, errors = score(docs, ner)
+    rows["MICRO"]["f1_ci95"] = bootstrap_f1(docs, ner)
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
-    json.dump({"n_reports": a.n, "seed": a.seed, "ner": a.ner, "scores": rows,
-               "error_examples": errors[:40]}, open(a.out, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    json.dump({"n_reports": a.n, "seed": a.seed, "ner": a.ner, "hard": a.hard, "scores": rows,
+               "error_examples": errors[:15]}, open(a.out, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
     print(f"{'label':<14}{'P':>7}{'R':>7}{'F1':>7}{'n':>7}")
     for lab, v in rows.items():
         print(f"{lab:<14}{v['precision']:>7.3f}{v['recall']:>7.3f}{v['f1']:>7.3f}{v['support']:>7}")
+    print("micro F1 95% CI:", rows["MICRO"]["f1_ci95"])
 
 
 if __name__ == "__main__":

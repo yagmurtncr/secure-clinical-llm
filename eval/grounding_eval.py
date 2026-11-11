@@ -29,6 +29,45 @@ from scllm.split.partition import split_model  # noqa: E402
 from scllm.split.runtime import SplitPipeline  # noqa: E402
 
 
+def bootstrap_ci(rows, n_boot=2000, seed=0):
+    """Paired bootstrap over reports: 95% CIs for each condition and for the with-minus-without difference."""
+    import numpy as np
+
+    reps = sorted({r["report"] for r in rows})
+    by = {(r["report"], r["condition"]): r for r in rows}
+    conds = sorted({r["condition"] for r in rows})
+
+    def stats(ids):
+        out = {}
+        for c in conds:
+            rr = [by[(i, c)] for i in ids]
+            claims = sum(r["claims"] for r in rr)
+            out[c] = {"answers_with_unsupported_numbers": sum(r["unsupported"] > 0 for r in rr) / len(rr),
+                      "contradiction_rate": (sum(r["contradictions"] for r in rr) / claims) if claims else float("nan"),
+                      "claims_per_answer": claims / len(rr)}
+        return out
+
+    rng = np.random.default_rng(seed)
+    point = stats(reps)
+    boots = [stats(list(rng.choice(reps, size=len(reps), replace=True))) for _ in range(n_boot)]
+    ci = {}
+    for c in conds:
+        ci[c] = {}
+        for k in point[c]:
+            vals = np.array([b[c][k] for b in boots], dtype=float)
+            vals = vals[~np.isnan(vals)]
+            ci[c][k] = {"point": round(point[c][k], 3),
+                        "lo": round(float(np.percentile(vals, 2.5)), 3) if len(vals) else None,
+                        "hi": round(float(np.percentile(vals, 97.5)), 3) if len(vals) else None}
+    if len(conds) == 2:
+        a, b = "with_flags", "without_flags"
+        for k in ("answers_with_unsupported_numbers", "claims_per_answer"):
+            d = np.array([bb[a][k] - bb[b][k] for bb in boots])
+            ci[f"diff_{k}"] = {"point": round(point[a][k] - point[b][k], 3),
+                               "lo": round(float(np.percentile(d, 2.5)), 3), "hi": round(float(np.percentile(d, 97.5)), 3)}
+    return ci
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="Qwen/Qwen2.5-7B-Instruct")
@@ -55,7 +94,7 @@ def main():
     conds = {"with_flags": True, "without_flags": False}
     agg = {c: {"answers": 0, "with_unsupported": 0, "unsupported_total": 0, "claims": 0, "contradictions": 0,
                "with_contradiction": 0, "tokens": 0, "decode_s": 0.0} for c in conds}
-    samples = []
+    samples, rows = [], []
     for i, rep in enumerate(reports):
         m = mask(rep)
         labs = parse_labs(m.text)
@@ -73,6 +112,9 @@ def main():
             s["with_contradiction"] += bool(g.contradictions)
             s["tokens"] += stats.new_tokens
             s["decode_s"] += stats.decode_s
+            rows.append({"report": i, "condition": c, "unsupported": len(g.unsupported_numbers),
+                         "claims": g.checked_statements, "contradictions": len(g.contradictions),
+                         "new_tokens": stats.new_tokens})
             if i < 3:
                 samples.append({"condition": c, "answer": ans, "grounding": g.to_dict()})
         print(f"[{i + 1}/{a.n}] " + "  ".join(
@@ -90,7 +132,7 @@ def main():
             "tokens_per_s": round(s["tokens"] / s["decode_s"], 2) if s["decode_s"] else None,
         }
     out = {"model": a.model, "n_reports": a.n, "seed": a.seed, "device": a.device, "dtype": a.dtype,
-           "shards": a.shards, "summary": summary, "samples": samples,
+           "shards": a.shards, "summary": summary, "ci95": bootstrap_ci(rows), "rows": rows, "samples": samples,
            "date": time.strftime("%Y-%m-%d")}
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     json.dump(out, open(a.out, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
