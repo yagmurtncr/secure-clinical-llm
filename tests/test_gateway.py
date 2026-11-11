@@ -23,7 +23,7 @@ def _engine(model):
 @pytest.fixture
 def client(tiny_model, tmp_path):
     audit = AuditLog(str(tmp_path / "audit.jsonl"))
-    app = create_app(_engine(tiny_model), JWT, audit, RateLimiter(rate_per_min=60, burst=2))
+    app = create_app(_engine(tiny_model), JWT, audit, RateLimiter(rate_per_min=0.5, burst=2))
     return TestClient(app), tmp_path / "audit.jsonl"
 
 
