@@ -8,6 +8,11 @@ from typing import Callable, Dict, List, Optional, Tuple
 from .detectors import Span, detect
 
 
+def turkish_lower(text: str) -> str:
+    """Length-preserving Turkish lowercase (str.lower turns İ into two code points)."""
+    return text.replace("İ", "i").replace("I", "ı").lower()
+
+
 @dataclass
 class MaskResult:
     text: str
@@ -26,10 +31,13 @@ def _propagate(text: str, spans: List[Span]) -> List[Span]:
     """A value found once (e.g. the name in the header field) is masked everywhere it appears verbatim."""
     taken = [(s.start, s.end) for s in spans]
     extra = []
-    for s in {(s.label, s.text) for s in spans if len(s.text) >= 3}:
-        for m in re.finditer(r"(?<!\w)" + re.escape(s[1]) + r"(?!\w)", text):
+    # Turkish-aware case folding keeps offsets (I->ı, İ->i are 1:1), so "AYŞE YILMAZ" also finds "Ayşe Yılmaz"
+    folded = turkish_lower(text)
+    for label, value in {(s.label, s.text) for s in spans if len(s.text) >= 3}:
+        pat = r"(?<!\w)" + re.escape(turkish_lower(value)) + r"(?!\w)"
+        for m in re.finditer(pat, folded):
             if all(m.end() <= a or m.start() >= b for a, b in taken):
-                extra.append(Span(m.start(), m.end(), s[0], s[1]))
+                extra.append(Span(m.start(), m.end(), label, text[m.start():m.end()]))
                 taken.append((m.start(), m.end()))
     return sorted(spans + extra, key=lambda x: x.start)
 

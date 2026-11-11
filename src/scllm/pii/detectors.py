@@ -37,10 +37,12 @@ _PHONE = re.compile(r"(?<![\d+])(?:\+90[ -]?|0090[ -]?|0)?\(?(5\d{2}|[2-4]\d{2})
 _PHONE_CTX = re.compile(r"(?i)(tel|telefon|gsm|cep|ileti[şs]im|phone)\W*$")
 _EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b")
 # key: value fields typical for Turkish lab / discharge reports
+_NAME_VALUE = r"(?P<v>[A-ZÇĞİÖŞÜ][a-zçğıöşüA-ZÇĞİÖŞÜ'.]+(?:[ \t]+[A-ZÇĞİÖŞÜ][a-zçğıöşüA-ZÇĞİÖŞÜ'.]+){0,3})"
 _NAME_FIELD = re.compile(
-    r"(?im)^[ \t]*(?:hasta(?:n[ıi]n)?[ \t]+ad[ıi](?:[ \t]+soyad[ıi])?|ad[ıi]?[ \t]*soyad[ıi]?|ad[ \t]*-[ \t]*soyad|hasta|"
-    r"doktor|dr\.?|hekim|isteyen[ \t]+hekim|onaylayan)[ \t]*[:\-][ \t]*(?:dr\.?[ \t]*)?"
-    r"(?P<v>[A-ZÇĞİÖŞÜ][a-zçğıöşüA-ZÇĞİÖŞÜ'.]+(?:[ \t]+[A-ZÇĞİÖŞÜ][a-zçğıöşüA-ZÇĞİÖŞÜ'.]+){0,3})")
+    r"(?im)^[ \t]*(?:hasta(?:n[ıi]n)?[ \t]+ad[ıi](?:[ \t]*-?[ \t]*soyad[ıi])?|ad[ıi]?[ \t]*-?[ \t]*soyad[ıi]?|ad[ıi]|"
+    r"isim|hasta|doktor|dr\.?|hekim|isteyen[ \t]+hekim|onaylayan)[ \t]*[:\-][ \t]*(?:dr\.?[ \t]*)?" + _NAME_VALUE)
+_SALUTATION = re.compile(r"(?im)\bsay[ıi]n[ \t]+(?:dr\.?[ \t]*)?" + _NAME_VALUE)
+_TCKN_SPACED = re.compile(r"(?<!\d)[1-9]\d{2}(?:[ .-]\d{3}){2}[ .-]\d{2}(?!\d)")
 _ID_FIELD = re.compile(r"(?im)\b(?:protokol|dosya|hasta|barkod|örnek|ornek)\s*(?:no|numaras[ıi])\s*[:\-]\s*(?P<v>[A-Z0-9-]{4,})")
 _DOB_FIELD = re.compile(r"(?im)\bdo[ğg]um\s+tarihi\s*[:\-]\s*(?P<v>\d{1,2}[./-]\d{1,2}[./-]\d{2,4})")
 _ADDRESS_FIELD = re.compile(r"(?im)^[ \t]*adres\s*[:\-]\s*(?P<v>.+)$")
@@ -54,6 +56,9 @@ def _regex_spans(text: str) -> List[Span]:
     for m in _TCKN.finditer(text):
         if tckn_valid(m.group()):
             spans.append(Span(m.start(), m.end(), "TCKN", m.group()))
+    for m in _TCKN_SPACED.finditer(text):  # 123 456 789 01 style grouping
+        if tckn_valid(re.sub(r"\D", "", m.group())):
+            spans.append(Span(m.start(), m.end(), "TCKN", m.group()))
     for m in _EMAIL.finditer(text):
         spans.append(Span(m.start(), m.end(), "EMAIL", m.group()))
     for m in _PHONE.finditer(text):
@@ -62,7 +67,7 @@ def _regex_spans(text: str) -> List[Span]:
         # a bare 10-digit run (5xxxxxxxxx) is often a serial / lot number: require a phone keyword nearby
         if formatted or _PHONE_CTX.search(text[max(0, m.start() - 25):m.start()]):
             spans.append(Span(m.start(), m.end(), "TELEFON", g))
-    for rx, label in ((_NAME_FIELD, "AD"), (_ID_FIELD, "KAYIT_NO"), (_DOB_FIELD, "DOGUM_TARIHI"),
+    for rx, label in ((_NAME_FIELD, "AD"), (_SALUTATION, "AD"), (_ID_FIELD, "KAYIT_NO"), (_DOB_FIELD, "DOGUM_TARIHI"),
                       (_ADDRESS_FIELD, "ADRES")):
         for m in rx.finditer(text):
             v = m.group("v").rstrip(" .")
