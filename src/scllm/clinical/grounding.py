@@ -8,10 +8,14 @@ from typing import List
 from .labs import LabResult
 
 _NUM = re.compile(r"(?<![\w\]])\d+(?:[.,]\d+)?(?![\w\[])")
+# keys are regex prefixes matched at a word start; extended once using the dev paraphrases in
+# eval/checker_validation.py (held-out paraphrases are never used for tuning)
 _DIRECTION = {
-    "yüksek": "yüksek", "yükselmiş": "yüksek", "artmış": "yüksek", "fazla": "yüksek",
-    "düşük": "düşük", "azalmış": "düşük", "eksik": "düşük",
-    "normal": "normal", "sınırlar içinde": "normal", "referans aralığında": "normal",
+    "yüksek": "yüksek", "yükselmiş": "yüksek", "artmış": "yüksek", "fazla": "yüksek", "üstünde": "yüksek",
+    "üzerinde": "yüksek",
+    "düşük": "düşük", "azalmış": "düşük", "eksik": "düşük", "altında": "düşük", r"az\b": "düşük",
+    "normal": "normal", "sınırlar içinde": "normal", "referans aralığında": "normal", "aralık içinde": "normal",
+    "sorun yok": "normal",
 }
 _PH = re.compile(r"\[[A-Z_]+_\d+\]")
 
