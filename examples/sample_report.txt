@@ -1,0 +1,17 @@
+LABORATUVAR SONUÇ RAPORU
+Hasta Adı Soyadı: Ayşe Yılmaz
+T.C. Kimlik No: 10000000146
+Doğum Tarihi: 12.03.1985
+Telefon: 0532 123 45 67
+Protokol No: 2026-118734
+İsteyen Hekim: Dr. Mehmet Demir
+Numune Tarihi: 04.11.2026
+
+TETKİK              SONUÇ    BİRİM     REFERANS
+Hemoglobin          10.2     g/dL      12.0 - 16.0
+Ferritin            8        ng/mL     15 - 150
+Glukoz (açlık)      126      mg/dL     70 - 100
+TSH                 2.1      mIU/L     0.4 - 4.0
+B12 Vitamini        310      pg/mL     200 - 900
+
+Not: Ayşe Yılmaz 3 ay sonra kontrole çağrıldı.
