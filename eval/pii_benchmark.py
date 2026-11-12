@@ -220,6 +220,7 @@ def main():
     ap.add_argument("--n", type=int, default=500)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--ner", action="store_true", help="add the transformer NER backend")
+    ap.add_argument("--ner-model", default="akdeniz27/bert-base-turkish-cased-ner")
     ap.add_argument("--hard", action="store_true", help="out-of-template stress set")
     ap.add_argument("--out", default="results/pii_benchmark.json")
     a = ap.parse_args()
@@ -228,7 +229,7 @@ def main():
     ner = None
     if a.ner:
         from scllm.pii.detectors import HFNer
-        ner = HFNer()
+        ner = HFNer(a.ner_model)
     rows, errors = score(docs, ner)
     rows["MICRO"]["f1_ci95"] = bootstrap_f1(docs, ner)
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
