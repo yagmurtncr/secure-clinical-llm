@@ -13,11 +13,11 @@ JWT = "j" * 40
 REPORT = "Hasta Adı Soyadı: Ayşe Yılmaz\nT.C. Kimlik No: 10000000146\nHemoglobin  10.2  g/dL  12.0 - 16.0\n"
 
 
-def _engine(model):
+def _engine(model, structured=False, gate=None, answer="[AD_1] için hemoglobin düşük."):
     gw, shards = split_model(model, 3)
     tok = Tokenizer(encode_chat=lambda msgs: [ord(c) % 128 for c in msgs[-1]["content"][:40]],
-                    decode=lambda ids: "[AD_1] için hemoglobin düşük.", eos_token_ids=[])
-    return Engine(SplitPipeline(gw, shards), tok, max_new_tokens=4)
+                    decode=lambda ids: answer, eos_token_ids=[])
+    return Engine(SplitPipeline(gw, shards), tok, max_new_tokens=4, structured=structured, gate=gate)
 
 
 @pytest.fixture
@@ -59,3 +59,35 @@ def test_rate_limit(client):
 def test_weak_secret_refused(tiny_model):
     with pytest.raises(ValueError):
         create_app(_engine(tiny_model), "short")
+
+
+def test_structured_answer_status_comes_from_code(tiny_model):
+    # the model claims "yüksek" for a low value: the rendered status is computed, the false sentence is dropped
+    raw = '{"ozet": "Genel durum iyi.", "testler": [{"test": "Hemoglobin", "aciklama": "Kanda oksijen taşır. Bu değer yüksek."}], "oneri": "Hekiminize danışın."}'
+    app = create_app(_engine(tiny_model, structured=True, answer=raw), JWT)
+    r = TestClient(app).post("/v1/analyze", json={"report": REPORT},
+                             headers={"Authorization": f"Bearer {issue_token(JWT, 'dr-3')}"}).json()
+    assert "→ Düşük" in r["answer"] and "Kanda oksijen taşır." in r["answer"] and "yüksek" not in r["answer"]
+    assert r["structured"] == {"parsed": True, "explained_tests": 1, "total_tests": 1, "removed_sentences": 1}
+    assert r["grounding"]["ok"]
+
+
+class _FakeNer:
+    """Stands in for the transformer NER: finds the lower-case name the regex rules cannot."""
+
+    def __call__(self, text):
+        from scllm.pii.detectors import Span
+        i = text.find("ayşe")
+        return [Span(i, i + 4, "AD", "ayşe")] if i >= 0 else []
+
+
+def test_gate_refuses_residual_pii(tiny_model, tmp_path):
+    from scllm.pii.gate import PrivacyGate
+
+    audit = AuditLog(str(tmp_path / "a.jsonl"))
+    app = create_app(_engine(tiny_model, gate=PrivacyGate(_FakeNer())), JWT, audit)
+    h = {"Authorization": f"Bearer {issue_token(JWT, 'dr-4')}"}
+    r = TestClient(app).post("/v1/analyze", json={"report": "Not: ayşe kontrole gelecek.\n" + REPORT}, headers=h)
+    assert r.status_code == 422
+    log = (tmp_path / "a.jsonl").read_text(encoding="utf-8")
+    assert "privacy_refused" in log and "ayşe" not in log
