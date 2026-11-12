@@ -223,7 +223,9 @@ on real Wikipedia sentences (WikiANN Turkish test, 1,000 sentences, 452 names), 
 0.724 for the base model (recall 0.772 vs 0.777), a small loss in precision and no collapse
 ([`results/ner_real_text.json`](results/ner_real_text.json)); and the older stress set from section 2 goes from
 0.987 to 0.999 micro F1 (its name lists overlap the training pool, so this is a regression check only).
-Fine-tuned weights are not committed (440 MB); `scripts/train_ner.py` reproduces them on a laptop CPU.
+The fine-tuned model is on the Hugging Face Hub as
+[`yagmurtuncer/bert-base-turkish-clinical-ner`](https://huggingface.co/yagmurtuncer/bert-base-turkish-clinical-ner)
+(fp16, 220 MB; use it with `SCLLM_NER_MODEL`), and `scripts/train_ner.py` reproduces it on a laptop CPU.
 
 ```bash
 python scripts/train_ner.py --n 2000 --out models/ner-clinical-tr
