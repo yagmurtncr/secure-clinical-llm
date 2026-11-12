@@ -21,12 +21,14 @@ flowchart LR
     U["Clinician<br/>HTTPS + JWT"] --> A
     subgraph GW["Gateway (trusted)"]
         direction TB
-        A["Auth · rate limit<br/>audit log (no PII)"] --> M["PII masking<br/>regex + checksums + NER"]
-        M --> L["Lab parser<br/>deterministic high/low flags"]
+        A["Auth · rate limit<br/>audit log (no PII)"] --> M["PII masking<br/>regex + checksums + clinical NER"]
+        M --> Q{"Privacy gate<br/>residual PII?"}
+        Q -- "yes: refuse (422)" --> X["Not sent"]
+        Q -- "no" --> L["Lab parser<br/>deterministic high/low flags"]
         L --> P["Prompt = masked report<br/>+ computed flags"]
         P --> E["Embedding"]
-        H["Final norm + LM head"] --> D["Decode"]
-        D --> G["Grounding check<br/>invented numbers · wrong claims"]
+        H["Final norm + LM head"] --> D["Decode JSON<br/>per-test explanations"]
+        D --> G["Render: values + statuses from code<br/>drop flagged sentences"]
         G --> R["Unmask placeholders"]
     end
     E -- "AES-256-GCM" --> N1["Node 1<br/>layers 0-9"]
@@ -48,7 +50,9 @@ flowchart LR
 | **Authenticated X25519 handshake + AES-256-GCM with counters** | Fresh keys per channel, tamper detection, replay and reflection rejection, and rogue machines without the cluster secret are refused. |
 | **PII masked *before* embedding, restored *after* decoding** | Because hidden states are invertible (measured below), identifiers must never enter the model. Placeholders like `[AD_1]` survive generation and are mapped back at the gateway. |
 | **Lab flags computed in code and given to the model** | The model explains; it does not do range arithmetic. The ablation below measures the effect. |
+| **Structured answers: the model explains, the code renders** | The model returns JSON with one explanation per test; the value, range and high/low status shown to the patient come from the lab parser, so they cannot be hallucinated. Explanation sentences the checker flags are removed (section 8). |
 | **Grounding check on every answer** | Flags numbers that are not in the report and high/low statements that contradict the reference range. |
+| **Fail-closed privacy gate** | Because nodes can read hidden states back (section 3) and noise does not fix that (section 9), masking is the guarantee. A second, recall-first scan of the masked text refuses to send anything that still looks like PII (section 7). |
 
 Full threat model, including what this design does **not** protect against: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
@@ -157,7 +161,8 @@ and a *held-out* set written beforehand and never used for tuning.
 
 The checker never raises false alarms and reliably catches invented numbers, but a keyword lexicon does not
 generalize to unseen phrasings: a contradiction worded differently goes unnoticed. Results in section 6
-therefore count only claims the checker can parse, and an NLI-based checker is the next step.
+therefore count only claims the checker can parse. Section 8 removes the dependence on the checker for the
+status line itself; an NLI-based checker for free wording is still open.
 
 ### 6. Do computed flags reduce hallucination? (ablation)
 
@@ -180,6 +185,106 @@ next step.
 
 ```bash
 python eval/grounding_eval.py --model Qwen/Qwen2.5-7B-Instruct --n 50 --device cuda
+```
+
+### 7. Making masking the guarantee: clinical NER fine-tune + fail-closed gate
+
+Sections 3 and 9 show that whatever enters the model can be read back by a node, so the question that matters
+for privacy is: **how often does an identifier reach the nodes unmasked?** To measure it honestly, a new
+generator ([`src/scllm/pii/synthetic.py`](src/scllm/pii/synthetic.py)) writes clinical documents from
+*template families* (lab headers, discharge summaries, consult notes, referral letters for training; nursing
+notes, phone-call logs and ward handover tables held out) with names from *disjoint pools*, Turkish case
+suffixes with vowel harmony ("Öztürk'ün", "Koç'tan"), upper / lower case, titles and relatives.
+
+The base Turkish NER model was fine-tuned on 2,000 training-family documents on CPU (1 epoch, 15 min,
+[`scripts/train_ner.py`](scripts/train_ner.py)), with whole-document upper/lower-casing as augmentation because
+the cased base model missed lower-case names. Results on 1,000 held-out documents (unseen families, unseen
+names; [`results/pii_heldout.json`](results/pii_heldout.json)):
+
+| Gateway configuration | Name recall | PII characters masked | Documents leaking ≥1 identifier [95% CI] | Refused by gate |
+|---|---|---|---|---|
+| Regex + validators | 0.000 | 16.6 % | 100 % | - |
+| + base Turkish NER | 0.988 | 99.54 % | 2.0 % [1.3, 3.1] | - |
+| + base NER + gate | 0.993 | 99.95 % | 0.4 % [0.2, 1.0] | 1.6 % |
+| + **clinical NER (fine-tuned)** | **1.000** | **100 %** | **0 %** [0, 0.38] | - |
+| + clinical NER + gate | 1.000 | 100 % | 0 % [0, 0.38] | 0 % |
+
+The gate re-runs NER on the *masked* text at a low confidence threshold (0.30), looks for any validated ID,
+phone or e-mail and any 10-11 digit run outside a placeholder, and refuses the request if it finds one
+([`src/scllm/pii/gate.py`](src/scllm/pii/gate.py)); the API answers 422 and the audit log records only the
+finding labels. With the base model it turned 20 leaky documents into 4, at a cost of refusing 1.6 %. A list of
+titles (Dr., Hemş., Bey, Hanım...) that the gate must not count as names was added after inspecting its
+refusals on this set; that is the only design decision informed by held-out data.
+
+**What the perfect score does and does not mean.** Train and test come from the same author and the same kind
+of generator, so 0 leaks out of 1,000 says the fine-tune learned these formats and generalizes across
+families and names, not that real hospital text is solved. Two checks against overfitting to the generator:
+on real Wikipedia sentences (WikiANN Turkish test, 1,000 sentences, 452 names), person-name F1 is 0.705 vs
+0.724 for the base model (recall 0.772 vs 0.777), a small loss in precision and no collapse
+([`results/ner_real_text.json`](results/ner_real_text.json)); and the older stress set from section 2 goes from
+0.987 to 0.999 micro F1 (its name lists overlap the training pool, so this is a regression check only).
+Fine-tuned weights are not committed (440 MB); `scripts/train_ner.py` reproduces them on a laptop CPU.
+
+```bash
+python scripts/train_ner.py --n 2000 --out models/ner-clinical-tr
+python eval/pii_heldout.py --n 1000 --configs regex+ner,regex+ner+gate,regex+ner_ft,regex+ner_ft+gate
+python eval/ner_real_text.py --n 1000
+```
+
+### 8. Structured answers: statuses come from code
+
+In structured mode ([`src/scllm/clinical/structured.py`](src/scllm/clinical/structured.py)) the model returns
+`{"ozet", "testler": [{"test", "aciklama"}], "oneri"}`. The gateway renders the answer itself: every line's
+value, reference range and status is taken from the lab parser; the model's text is attached as an
+explanation only after sentences with invented numbers or a contradicting direction word are removed. If the
+JSON is cut off by the token limit, completed test objects are kept; if nothing parses, the answer is the
+computed table alone. A unit test feeds an adversarial output (a low value described as "yüksek") and checks
+that the patient sees "Düşük" and never the false sentence.
+
+Same 12 reports, Qwen2.5-1.5B-Instruct on CPU, 384 new tokens ([`results/structured_vs_free.json`](results/structured_vs_free.json)):
+
+| | Free text (with flags) | Structured |
+|---|---|---|
+| JSON parsed (incl. truncated-output salvage) | - | 12 / 12 |
+| Answers with a contradiction the checker finds | 0 / 12 | 0 / 12 |
+| Answers with an invented number | 0 / 12 | 0 / 12 |
+| Abnormal tests mentioned | 100 % | 100 % (by construction) |
+| Sentences removed by the gateway | - | 2 |
+
+At this size and n, both modes are already clean on what the checker can see, so this is **not** a measured
+improvement; the value of structured mode is a guarantee that does not depend on the checker's recall (which is
+0 % on unseen paraphrases, section 5). The run also showed the limit of a 1.5B model: its "explanations" mostly
+echoed the flags line, so the renderer now drops such echoes instead of printing them twice. Explanation
+quality needs the 7B run.
+
+### 9. Does noise on the hidden states help? (privacy-utility curve)
+
+The gateway adds Gaussian noise, scaled to each token's hidden-state RMS, to what it sends to the first node.
+The attacker knows the noise level and trains its probe on noisy states. Qwen2.5-0.5B-Instruct, 60 training
+and 30 held-out documents (unseen families and names), boundary after the embedding (k = 0) or after two
+gateway-held layers (k = 2); [`results/noise_defense.json`](results/noise_defense.json):
+
+| k | Noise σ | Probe: all tokens | Probe: unseen names | Nearest embedding, no training | Top-1 agreement with clean model | Perplexity × |
+|---|---|---|---|---|---|---|
+| 0 | 0 | 0.84 | 0.66 | 1.00 | 1.00 | 1.0 |
+| 0 | 0.25 | 0.84 | 0.65 | 1.00 | 0.78 | 1.1 |
+| 0 | 1 | 0.80 | 0.55 | 1.00 | 0.30 | 6.9 |
+| 0 | 4 | 0.54 | 0.14 | 0.99 | 0.02 | 311 |
+| 2 | 0 | 0.82 | 0.57 | 0.00 | 1.00 | 1.0 |
+| 2 | 0.25 | 0.81 | 0.57 | 0.00 | 0.78 | 1.1 |
+| 2 | 1 | 0.76 | 0.42 | 0.00 | 0.36 | 3.6 |
+| 2 | 4 | 0.47 | 0.05 | 0.00 | 0.07 | 1003 |
+
+There is no useful operating point: noise small enough to keep the model working (σ = 0.25 already changes
+22 % of next-token predictions) leaves recovery almost untouched, and noise large enough to hide names makes
+the output meaningless. At k = 0 even σ = 4 leaves the training-free nearest-embedding attack at 99 %, because
+in 896 dimensions the true token stays the closest of 152k candidates. This is why the design relies on
+masking plus the gate (section 7) and treats nodes as trusted on-premise machines, rather than on perturbing
+activations. (Recovery numbers here are lower than in section 3 because the probe is trained on 60 instead of
+100 documents and tested on different document types.)
+
+```bash
+python eval/noise_defense.py --boundary 0 2 --sigmas 0 0.25 1 4 --train 60 --test 30
 ```
 
 ## Quick start
@@ -206,10 +311,11 @@ curl -s localhost:8080/v1/analyze -H "Authorization: Bearer $TOKEN" \
 The response contains the unmasked answer, the parsed labs with their flags, the grounding report, PII counts
 and per-stage timings. For GPUs, set `SCLLM_DEVICE=cuda` and give each node service a GPU in the compose file.
 
-**Tests:** `pytest -q` (46 tests, including property-based tests with Hypothesis: mask/unmask is lossless
+**Tests:** `pytest -q` (58 tests, including property-based tests with Hypothesis: mask/unmask is lossless
 for arbitrary surrounding text, detector spans never overlap, every layer is assigned to exactly one shard,
 encrypted frames round-trip for random shapes and dtypes; plus split exactness, safetensors shard loading,
-channel security, lab parsing, grounding and API auth / rate limit / audit).
+channel security, lab parsing, grounding, structured rendering with adversarial model output, the privacy
+gate (422 on residual PII, nothing logged) and API auth / rate limit / audit).
 
 ## Repository layout
 
@@ -217,10 +323,13 @@ channel security, lab parsing, grounding and API auth / rate limit / audit).
 src/scllm/
   split/       partitioning, shard loading from safetensors, pipeline runtime with per-node KV cache
   transport/   X25519 + AES-256-GCM channel, node server, remote-stage client
-  pii/         Turkish PII detectors (checksums, field patterns, optional NER) and reversible masking
-  clinical/    lab-row parser and flags, prompt, grounding checks
+  pii/         Turkish PII detectors (checksums, field patterns, NER), reversible masking, fail-closed gate,
+               synthetic clinical documents with held-out template families and name pools
+  clinical/    lab-row parser and flags, prompts, grounding checks, structured (JSON) answer rendering
   api/         FastAPI gateway, JWT, rate limiting, PII-free audit log
-eval/          PII benchmark (+ stress set), hidden-state leakage, overhead, checker validation, grounding ablation
+eval/          PII benchmarks (standard, stress, held-out families, real-text NER check), hidden-state leakage,
+               noise defense, overhead, checker validation, grounding ablation, structured vs free text
+scripts/       clinical NER fine-tuning (CPU), token issuing
 docs/          threat model
 examples/      sample report and single-machine demo
 ```
@@ -228,8 +337,11 @@ examples/      sample report and single-machine demo
 ## Limitations
 
 Research prototype, not a medical device and not audited for KVKK / GDPR / HIPAA compliance. Hidden states
-leak the (masked) report to a curious node (section 3); nodes must be trusted on-premise machines; PII recall
-on real reports is untested; the grounding checker misses unseen paraphrases (section 5). See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
+leak the (masked) report to a curious node (section 3) and noise does not fix it (section 9); nodes must be
+trusted on-premise machines. PII results are on synthetic documents: zero leaks on held-out families is
+evidence about generalization across formats, not about real hospital text, which has not been tested. The
+grounding checker misses unseen paraphrases (section 5); structured answers protect the status line but not
+the wording of explanations. See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
 ## Background
 
