@@ -21,19 +21,23 @@ ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cp
 ap.add_argument("--dtype", default="bfloat16")
 ap.add_argument("--shards", type=int, default=3)
 ap.add_argument("--report", default=str(Path(__file__).with_name("sample_report.txt")))
-ap.add_argument("--ner", action="store_true")
+ap.add_argument("--ner", action="store_true", help="NER for free-text names + fail-closed privacy gate")
+ap.add_argument("--ner-model", default="akdeniz27/bert-base-turkish-cased-ner")
+ap.add_argument("--free-text", action="store_true", help="free-text answers instead of structured rendering")
 a = ap.parse_args()
 
 from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: E402
 
 model = AutoModelForCausalLM.from_pretrained(a.model, dtype=getattr(torch, a.dtype)).to(a.device).eval()
 gw, shards = split_model(model, a.shards)
-ner = None
+ner = gate = None
 if a.ner:
     from scllm.pii.detectors import HFNer
-    ner = HFNer()
+    from scllm.pii.gate import PrivacyGate
+    ner = HFNer(a.ner_model)
+    gate = PrivacyGate(ner)
 engine = Engine(SplitPipeline(gw, shards), Tokenizer.from_hf(AutoTokenizer.from_pretrained(a.model)), ner=ner,
-                max_new_tokens=400)
+                max_new_tokens=400, gate=gate, structured=not a.free_text)
 out = engine.analyze(Path(a.report).read_text(encoding="utf-8"))
 print("=== what the shards' input was built from (masked) ===\n" + out.pop("masked_report"))
 print("\n=== answer (unmasked at the gateway) ===\n" + out.pop("answer"))
