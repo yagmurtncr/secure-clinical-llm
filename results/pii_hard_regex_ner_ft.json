@@ -1,0 +1,1 @@
+{"n_reports":300,"seed":3,"ner":true,"hard":true,"scores":{"AD":{"precision":0.998,"recall":1.0,"f1":0.999,"support":516},"TCKN":{"precision":1.0,"recall":1.0,"f1":1.0,"support":300},"TELEFON":{"precision":1.0,"recall":1.0,"f1":1.0,"support":179},"MICRO":{"precision":0.999,"recall":1.0,"f1":0.999,"support":995,"f1_ci95":[0.998,1.0]}},"error_examples":[["FP","AD","soyadı"]]}
