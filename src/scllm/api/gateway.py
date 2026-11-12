@@ -8,7 +8,7 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
-from .engine import Engine
+from .engine import Engine, PrivacyRefused
 from .security import AuditLog, RateLimiter, digest, verify_token
 
 MAX_REPORT_CHARS = 12_000
@@ -50,6 +50,10 @@ def create_app(engine: Engine, jwt_secret: str, audit: Optional[AuditLog] = None
         rid = uuid.uuid4().hex
         try:
             out = engine.analyze(req.report)
+        except PrivacyRefused as e:
+            audit.write(request_id=rid, user=claims["sub"], event="privacy_refused", report_sha=digest(req.report),
+                        findings=[f["label"] for f in e.report.findings])
+            raise HTTPException(422, "residual PII detected after masking; the report was not sent for inference")
         except ValueError as e:
             audit.write(request_id=rid, user=claims["sub"], event="rejected", reason=str(e))
             raise HTTPException(413, str(e))
@@ -77,10 +81,13 @@ def build_from_env() -> FastAPI:  # pragma: no cover - wiring for docker-compose
     dtype = getattr(torch, os.environ.get("SCLLM_DTYPE", "bfloat16"))
     gw = load_gateway(model_id, dtype=dtype, device=os.environ.get("SCLLM_DEVICE", "cpu"))
     stages = [RemoteStage(u, secret) for u in os.environ["SCLLM_NODES"].split(",")]
-    ner = None
-    if os.environ.get("SCLLM_NER", "0") == "1":
+    ner = gate = None
+    if os.environ.get("SCLLM_NER", "1") == "1":
         from ..pii.detectors import HFNer
-        ner = HFNer()
+        from ..pii.gate import PrivacyGate
+        ner = HFNer(os.environ.get("SCLLM_NER_MODEL", "akdeniz27/bert-base-turkish-cased-ner"))
+        gate = PrivacyGate(ner)
     engine = Engine(SplitPipeline(gw, stages), Tokenizer.from_hf(AutoTokenizer.from_pretrained(model_id)), ner=ner,
-                    max_new_tokens=int(os.environ.get("SCLLM_MAX_NEW_TOKENS", 512)))
+                    max_new_tokens=int(os.environ.get("SCLLM_MAX_NEW_TOKENS", 512)), gate=gate,
+                    structured=os.environ.get("SCLLM_STRUCTURED", "1") == "1")
     return create_app(engine, os.environ["SCLLM_JWT_SECRET"], AuditLog(os.environ.get("SCLLM_AUDIT_LOG")))

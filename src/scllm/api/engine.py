@@ -10,6 +10,8 @@ import torch
 from ..clinical.grounding import check
 from ..clinical.labs import parse_labs
 from ..clinical.prompt import build_messages
+from ..clinical.structured import build_structured_messages, render
+from ..pii.gate import PrivacyGate
 from ..pii.masker import mask, unmask
 from ..split.runtime import SplitPipeline
 
@@ -37,25 +39,51 @@ class Tokenizer:
         return cls(enc, lambda ids: tok.decode(ids, skip_special_tokens=True), eos)
 
 
+class PrivacyRefused(Exception):
+    """The masked report still looks like it contains PII; it was not sent to the nodes."""
+
+    def __init__(self, report):
+        super().__init__("residual PII detected after masking; report was not sent for inference")
+        self.report = report
+
+
 class Engine:
+    """``structured=True``: the model returns per-test explanations as JSON and the gateway renders values and
+    statuses itself (see clinical/structured.py). ``gate``: fail-closed residual-PII check before any node sees
+    the report; pass ``PrivacyGate(ner)`` in production."""
+
     def __init__(self, pipeline: SplitPipeline, tokenizer: Tokenizer, ner: Optional[Callable] = None,
-                 max_new_tokens: int = 512, max_prompt_tokens: int = 3072):
+                 max_new_tokens: int = 512, max_prompt_tokens: int = 3072, structured: bool = True,
+                 gate: Optional[PrivacyGate] = None):
         self.pipeline, self.tok, self.ner = pipeline, tokenizer, ner
         self.max_new_tokens, self.max_prompt_tokens = max_new_tokens, max_prompt_tokens
+        self.structured, self.gate = structured, gate
 
     def analyze(self, report: str) -> dict:
         t0 = time.perf_counter()
         masked = mask(report, self.ner)
+        if self.gate is not None:
+            verdict = self.gate.check(masked)
+            if not verdict.ok:
+                raise PrivacyRefused(verdict)
         labs = parse_labs(masked.text)
         t_mask = time.perf_counter() - t0
-        ids = self.tok.encode_chat(build_messages(masked.text, labs))
+        msgs = build_structured_messages(masked.text, labs) if self.structured else build_messages(masked.text, labs)
+        ids = self.tok.encode_chat(msgs)
         if len(ids) > self.max_prompt_tokens:
             raise ValueError(f"report too long ({len(ids)} tokens > {self.max_prompt_tokens})")
         new_ids, stats = self.pipeline.generate(torch.tensor([ids]), self.max_new_tokens, self.tok.eos_token_ids)
         raw_answer = self.tok.decode(new_ids)
-        grounding = check(raw_answer, masked.text, labs)
+        extra = {}
+        if self.structured:
+            sa = render(raw_answer, masked.text, labs)
+            answer_masked, extra["structured"] = sa.text, sa.to_dict()
+        else:
+            answer_masked = raw_answer
+        grounding = check(answer_masked, masked.text, labs)
         return {
-            "answer": unmask(raw_answer, masked.mapping),
+            "answer": unmask(answer_masked, masked.mapping),
+            **extra,
             "labs": [l.to_dict() for l in labs],
             "grounding": grounding.to_dict(),
             "pii": masked.counts(),
